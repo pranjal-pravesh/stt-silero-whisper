@@ -10,6 +10,10 @@ import sys
 import torch
 import numpy as np
 import struct
+from rich.console import Console
+
+# Create a console for Rich output
+console = Console()
 
 class VADDetector:
     """
@@ -17,7 +21,7 @@ class VADDetector:
     Detects whether speech is present in an audio chunk.
     """
     
-    def __init__(self, threshold=0.5, sample_rate=16000):
+    def __init__(self, threshold=0.5, sample_rate=16000, verbose=False):
         """
         Initialize the VAD detector with the specified threshold.
         
@@ -25,12 +29,15 @@ class VADDetector:
             threshold (float): Speech detection threshold between 0 and 1.
                               Higher values make detection more strict. Default is 0.5.
             sample_rate (int): Sample rate in Hz. Default is 16000.
+            verbose (bool): Whether to log detailed information. Default is False.
         """
         if not 0 <= threshold <= 1:
             raise ValueError("Threshold must be between 0 and 1")
         
         self.threshold = threshold
         self.sample_rate = sample_rate
+        self.verbose = verbose
+        self.last_speech_probability = 0.0  # Track last speech probability
         
         # Silero VAD requires specific number of samples:
         # - 256 samples for 8kHz
@@ -39,6 +46,7 @@ class VADDetector:
         
         try:
             # Initialize silero VAD model
+            console.print("[bold cyan]Loading Silero VAD model...[/bold cyan]")
             model, utils = torch.hub.load(
                 repo_or_dir='snakers4/silero-vad',
                 model='silero_vad',
@@ -57,8 +65,8 @@ class VADDetector:
             # Create VAD iterator with explicit options
             self.model = model  # Store the model directly
             self.vad = VADIterator(model, threshold=self.threshold, sampling_rate=sample_rate)
-            print(f"Silero VAD initialized with threshold {self.threshold} for {sample_rate} Hz audio")
-            print(f"Required samples per chunk: {self.required_samples}")
+            console.print(f"[bold green]Silero VAD initialized[/bold green] with threshold {self.threshold} for {sample_rate} Hz audio")
+            console.print(f"Required samples per chunk: {self.required_samples}")
             
             # Test the VAD with a silent sample to ensure it's working
             test_tensor = torch.zeros(self.required_samples)
@@ -105,14 +113,18 @@ class VADDetector:
             
             # Check if we have a valid numpy array
             if audio_np.size == 0:
-                print("Warning: Empty audio chunk, skipping VAD processing")
+                if self.verbose:
+                    console.print("[yellow]Warning: Empty audio chunk, skipping VAD processing[/yellow]")
+                self.last_speech_probability = 0.0
                 return False
             
             # Resize array to the required number of samples
             # If too long, take only the needed portion
             # If too short, return False (can't process)
             if len(audio_np) < self.required_samples:
-                print(f"Warning: Audio chunk too short ({len(audio_np)} samples, need {self.required_samples})")
+                if self.verbose:
+                    console.print(f"[yellow]Warning: Audio chunk too short ({len(audio_np)} samples, need {self.required_samples})[/yellow]")
+                self.last_speech_probability = 0.0
                 return False
             
             # Process in chunks of required_samples
@@ -132,14 +144,16 @@ class VADDetector:
                 
                 # Ensure chunk is the exact size required
                 if len(chunk) != self.required_samples:
-                    print(f"Warning: Chunk size mismatch, got {len(chunk)}, expected {self.required_samples}")
+                    if self.verbose:
+                        console.print(f"[yellow]Warning: Chunk size mismatch, got {len(chunk)}, expected {self.required_samples}[/yellow]")
                     continue
                 
                 # Convert to torch tensor
                 try:
                     audio_tensor = torch.from_numpy(chunk)
                 except Exception as e:
-                    print(f"Error converting chunk to tensor: {str(e)}")
+                    if self.verbose:
+                        console.print(f"[bold red]Error converting chunk to tensor: {str(e)}[/bold red]")
                     continue
                 
                 # Get speech probability from the model
@@ -162,15 +176,18 @@ class VADDetector:
                             speech_prob = float(vad_result['probability'])
                         elif 'start' in vad_result:
                             # Start of speech segment marker, not an error
-                            print(f"🎬 Speech segment starts at {vad_result['start']}s")
+                            if self.verbose:
+                                console.print(f"[blue]🎬 Speech segment starts at {vad_result['start']}s[/blue]")
                             continue
                         elif 'end' in vad_result:
                             # End of speech segment marker, not an error
-                            print(f"🏁 Speech segment ends at {vad_result['end']}s")
+                            if self.verbose:
+                                console.print(f"[blue]🏁 Speech segment ends at {vad_result['end']}s[/blue]")
                             continue
                         else:
                             # Only print warnings for truly unexpected dictionary formats
-                            print(f"Warning: VAD returned dict with unknown format: {vad_result}")
+                            if self.verbose:
+                                console.print(f"[yellow]Warning: VAD returned dict with unknown format: {vad_result}[/yellow]")
                             continue
                     elif isinstance(vad_result, (int, float)):
                         # Handle direct float/int values
@@ -179,7 +196,8 @@ class VADDetector:
                         # Normal case: tensor with single value
                         speech_prob = vad_result.item()
                 except Exception as e:
-                    print(f"Warning: Couldn't extract probability from VAD result: {type(vad_result)} - {e}")
+                    if self.verbose:
+                        console.print(f"[bold red]Warning: Couldn't extract probability from VAD result: {type(vad_result)} - {e}[/bold red]")
                     continue
                 
                 speech_probs.append(speech_prob)
@@ -195,17 +213,22 @@ class VADDetector:
             if speech_probs:
                 avg_prob = sum(speech_probs) / len(speech_probs)
                 max_prob = max(speech_probs)
+                self.last_speech_probability = max_prob  # Store the maximum probability
+            else:
+                self.last_speech_probability = 0.0
                 
-            if speech_detected:
-                print(f"🗣️ Speech detected (avg_prob={avg_prob:.2f}, max_prob={max_prob:.2f})")
-            elif max_prob > 0.1:
-                # Only log silence if there was some non-trivial probability
-                print(f"🔇 Silence (avg_prob={avg_prob:.2f}, max_prob={max_prob:.2f})")
+            if self.verbose:
+                if speech_detected:
+                    console.print(f"[bold green]🗣️ Speech detected[/bold green] (avg_prob={avg_prob:.2f}, max_prob={max_prob:.2f})")
+                elif max_prob > 0.1:
+                    # Only log silence if there was some non-trivial probability
+                    console.print(f"[dim]🔇 Silence[/dim] (avg_prob={avg_prob:.2f}, max_prob={max_prob:.2f})")
             
             return speech_detected
             
         except Exception as e:
-            print(f"Error in VAD processing: {str(e)}", file=sys.stderr)
+            console.print(f"[bold red]Error in VAD processing: {str(e)}[/bold red]")
+            self.last_speech_probability = 0.0
             return False
     
     def reset(self):
@@ -216,17 +239,19 @@ class VADDetector:
         if hasattr(self, 'vad'):
             try:
                 self.vad.reset_states()
-                print("VAD state reset")
+                if self.verbose:
+                    console.print("[blue]VAD state reset[/blue]")
             except Exception as e:
-                print(f"Warning: Failed to reset VAD state: {e}")
+                console.print(f"[yellow]Warning: Failed to reset VAD state: {e}[/yellow]")
                 # Recreate the VAD iterator if reset fails
                 if hasattr(self, 'model'):
                     try:
                         self.vad = VADIterator(self.model, threshold=self.threshold, 
                                               sampling_rate=self.sample_rate)
-                        print("VAD iterator recreated")
+                        if self.verbose:
+                            console.print("[blue]VAD iterator recreated[/blue]")
                     except Exception as e2:
-                        print(f"Error recreating VAD iterator: {e2}")
+                        console.print(f"[bold red]Error recreating VAD iterator: {e2}[/bold red]")
 
 
 if __name__ == "__main__":
@@ -285,4 +310,4 @@ if __name__ == "__main__":
         if 'vad' in locals():
             vad.reset()
     except Exception as e:
-        print(f"Error: {str(e)}", file=sys.stderr) 
+        print(f"Error: {str(e)}") 

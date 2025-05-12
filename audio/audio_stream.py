@@ -6,6 +6,10 @@ import sys
 import time
 import numpy as np
 import struct
+from rich.console import Console
+
+# Create a console for Rich output
+console = Console()
 
 # Import VADDetector only if available, otherwise gracefully handle import
 try:
@@ -13,7 +17,7 @@ try:
     VAD_AVAILABLE = True
 except ImportError:
     VAD_AVAILABLE = False
-    print("VAD module not found. Speech detection will be disabled.")
+    console.print("[bold yellow]VAD module not found. Speech detection will be disabled.[/bold yellow]")
 
 class AudioStream:
     """
@@ -22,7 +26,7 @@ class AudioStream:
     Can optionally detect speech using Silero VAD in real-time.
     """
     
-    def __init__(self, chunk_duration_ms=100, sample_rate=16000, channels=1, mic_index=None, vad_threshold=0.5, enable_vad=True):
+    def __init__(self, chunk_duration_ms=100, sample_rate=16000, channels=1, mic_index=None, vad_threshold=0.5, enable_vad=True, verbose=False):
         """
         Initialize the audio stream with the specified parameters.
         
@@ -34,6 +38,7 @@ class AudioStream:
             mic_index (int, optional): Index of the microphone to use. If None, default mic is used.
             vad_threshold (float): Speech detection threshold between 0 and 1. Default is 0.5.
             enable_vad (bool): Whether to enable speech detection using Silero VAD. Default is True.
+            verbose (bool): Whether to log detailed information. Default is False.
         """
         self.sample_rate = sample_rate
         self.channels = channels
@@ -41,6 +46,7 @@ class AudioStream:
         self.mic_index = mic_index
         self.vad_threshold = vad_threshold
         self.enable_vad = enable_vad and VAD_AVAILABLE
+        self.verbose = verbose
         
         # Calculate frames per buffer based on chunk duration
         self.frames_per_buffer = int(sample_rate * chunk_duration_ms / 1000)
@@ -69,13 +75,13 @@ class AudioStream:
             # Initialize VAD if enabled
             if self.enable_vad:
                 try:
-                    self.vad = VADDetector(threshold=self.vad_threshold, sample_rate=self.sample_rate)
-                    print(f"Voice Activity Detection enabled with threshold {self.vad_threshold}")
+                    self.vad = VADDetector(threshold=self.vad_threshold, sample_rate=self.sample_rate, verbose=self.verbose)
+                    console.print(f"[bold green]Voice Activity Detection enabled[/bold green] with threshold {self.vad_threshold}")
                     # Get the required buffer size based on VAD requirements
                     self.required_samples = self.vad.required_samples
                     self.min_buffer_size = self.required_samples * 2  # in bytes (each sample is 2 bytes)
                 except Exception as e:
-                    print(f"Failed to initialize VAD: {str(e)}", file=sys.stderr)
+                    console.print(f"[bold red]Failed to initialize VAD: {str(e)}[/bold red]")
                     self.enable_vad = False
             
             device_info = "default microphone"
@@ -85,8 +91,8 @@ class AudioStream:
                 except:
                     device_info = f"microphone at index {self.mic_index}"
                     
-            print(f"Audio stream started: {self.channels} channel(s) at {self.sample_rate} Hz using {device_info}")
-            print(f"Chunk duration: {chunk_duration_ms}ms ({self.frames_per_buffer} samples)")
+            console.print(f"[bold green]Audio stream started:[/bold green] {self.channels} channel(s) at {self.sample_rate} Hz using {device_info}")
+            console.print(f"Chunk duration: {chunk_duration_ms}ms ({self.frames_per_buffer} samples)")
             
         except Exception as e:
             self._cleanup()
@@ -94,22 +100,22 @@ class AudioStream:
     
     def _list_microphones(self):
         """List all available microphones."""
-        print("\nAvailable microphones:")
-        print("-" * 60)
+        console.print("\n[bold cyan]Available microphones:[/bold cyan]")
+        console.rule()
         
         for i in range(self.pa.get_device_count()):
             try:
                 device_info = self.pa.get_device_info_by_index(i)
                 if device_info.get('maxInputChannels') > 0:  # Only show input devices
-                    print(f"[{i}] {device_info['name']}")
-                    print(f"    Channels: {device_info['maxInputChannels']}")
-                    print(f"    Sample Rate: {int(device_info['defaultSampleRate'])} Hz")
-                    print("-" * 60)
+                    console.print(f"[bold][{i}][/bold] {device_info['name']}")
+                    console.print(f"    Channels: {device_info['maxInputChannels']}")
+                    console.print(f"    Sample Rate: {int(device_info['defaultSampleRate'])} Hz")
+                    console.rule()
             except Exception as e:
-                print(f"[{i}] Error getting device info: {str(e)}")
-                print("-" * 60)
+                console.print(f"[bold red][{i}] Error getting device info: {str(e)}[/bold red]")
+                console.rule()
         
-        print("")
+        console.print("")
     
     @classmethod
     def list_available_microphones(cls):
@@ -122,24 +128,24 @@ class AudioStream:
         mics = {}
         p = pyaudio.PyAudio()
         
-        print("\nAvailable microphones:")
-        print("-" * 60)
+        console.print("\n[bold cyan]Available microphones:[/bold cyan]")
+        console.rule()
         
         for i in range(p.get_device_count()):
             try:
                 device_info = p.get_device_info_by_index(i)
                 if device_info.get('maxInputChannels') > 0:  # Only show input devices
                     mics[i] = device_info
-                    print(f"[{i}] {device_info['name']}")
-                    print(f"    Channels: {device_info['maxInputChannels']}")
-                    print(f"    Sample Rate: {int(device_info['defaultSampleRate'])} Hz")
-                    print("-" * 60)
+                    console.print(f"[bold][{i}][/bold] {device_info['name']}")
+                    console.print(f"    Channels: {device_info['maxInputChannels']}")
+                    console.print(f"    Sample Rate: {int(device_info['defaultSampleRate'])} Hz")
+                    console.rule()
             except Exception as e:
-                print(f"[{i}] Error getting device info: {str(e)}")
-                print("-" * 60)
+                console.print(f"[bold red][{i}] Error getting device info: {str(e)}[/bold red]")
+                console.rule()
         
         p.terminate()
-        print("")
+        console.print("")
         return mics
     
     def _bytes_to_numpy(self, audio_chunk):
@@ -165,7 +171,7 @@ class AudioStream:
             
             return float_samples
         except Exception as e:
-            print(f"Error converting audio to numpy: {str(e)}", file=sys.stderr)
+            console.print(f"[bold red]Error converting audio to numpy: {str(e)}[/bold red]")
             return np.array([], dtype=np.float32)
     
     def get_next_chunk(self):
@@ -181,7 +187,11 @@ class AudioStream:
         
         try:
             chunk_count = 0
-            print("Starting audio capture...")
+            if self.verbose:
+                console.print("[bold green]Starting audio capture...[/bold green]")
+            else:
+                # Still log this important message but simpler
+                console.print("Starting audio capture...")
             
             while self.stream.is_active():
                 # Read audio data from the stream
@@ -189,8 +199,8 @@ class AudioStream:
                 
                 # Only print log message occasionally to reduce output
                 chunk_count += 1
-                if chunk_count % 100 == 1:
-                    print(f"Processing audio... ({len(data)} bytes per chunk)")
+                if self.verbose and chunk_count % 100 == 1:
+                    console.print(f"Processing audio... ({len(data)} bytes per chunk)")
                 
                 # Speech detection
                 speech_detected = None
@@ -209,11 +219,11 @@ class AudioStream:
                             if len(self.buffer) > self.min_buffer_size * 2:
                                 self.buffer = self.buffer[-self.min_buffer_size:]
                     except Exception as e:
-                        print(f"Error in speech detection: {str(e)}", file=sys.stderr)
+                        console.print(f"[bold red]Error in speech detection: {str(e)}[/bold red]")
                         # If we get persistent errors, disable VAD
                         self.vad_error_count = getattr(self, 'vad_error_count', 0) + 1
                         if self.vad_error_count > 10:
-                            print("Too many VAD errors, disabling speech detection")
+                            console.print("[bold red]Too many VAD errors, disabling speech detection[/bold red]")
                             self.enable_vad = False
                             self.vad = None
                         # Continue without speech detection for this chunk
@@ -222,7 +232,7 @@ class AudioStream:
                 yield data, speech_detected
                 
         except Exception as e:
-            print(f"Error reading from audio stream: {str(e)}", file=sys.stderr)
+            console.print(f"[bold red]Error reading from audio stream: {str(e)}[/bold red]")
             raise
     
     def _cleanup(self):
@@ -231,9 +241,9 @@ class AudioStream:
             try:
                 self.stream.stop_stream()
                 self.stream.close()
-                print("Audio stream stopped")
+                console.print("[bold green]Audio stream stopped[/bold green]")
             except Exception as e:
-                print(f"Error stopping audio stream: {str(e)}", file=sys.stderr)
+                console.print(f"[bold red]Error stopping audio stream: {str(e)}[/bold red]")
             finally:
                 self.stream = None
         
@@ -241,7 +251,7 @@ class AudioStream:
             try:
                 self.pa.terminate()
             except Exception as e:
-                print(f"Error terminating PyAudio: {str(e)}", file=sys.stderr)
+                console.print(f"[bold red]Error terminating PyAudio: {str(e)}[/bold red]")
             finally:
                 self.pa = None
         
@@ -250,7 +260,7 @@ class AudioStream:
             try:
                 self.vad.reset()
             except Exception as e:
-                print(f"Error resetting VAD: {str(e)}", file=sys.stderr)
+                console.print(f"[bold red]Error resetting VAD: {str(e)}[/bold red]")
     
     def __enter__(self):
         """Context manager entry."""
@@ -266,7 +276,7 @@ class AudioStream:
 
 
 if __name__ == "__main__":
-    print("Testing AudioStream with Silero VAD - Press Ctrl+C to stop")
+    console.print("Testing AudioStream with Silero VAD - Press Ctrl+C to stop")
     
     # List available microphones
     mics = AudioStream.list_available_microphones()
@@ -279,12 +289,12 @@ if __name__ == "__main__":
             if mic_index:
                 selected_mic = int(mic_index)
         except ValueError:
-            print("Invalid input, using default microphone")
+            console.print("[bold yellow]Invalid input, using default microphone[/bold yellow]")
     
     try:
         # Use the selected microphone with VAD enabled
         with AudioStream(chunk_duration_ms=100, mic_index=selected_mic, enable_vad=True) as audio:
-            print("Listening for audio and detecting speech... (Press Ctrl+C to stop)")
+            console.print("Listening for audio and detecting speech... (Press Ctrl+C to stop)")
             
             # Process audio for 10 seconds
             start_time = time.time()
@@ -292,14 +302,14 @@ if __name__ == "__main__":
                 # Print detection result if available
                 if is_speech is not None:
                     if is_speech:
-                        print("Speech detected in this chunk!")
+                        console.print("[bold green]Speech detected in this chunk![/bold green]")
                     else:
-                        print("No speech in this chunk.")
+                        console.print("[bold yellow]No speech in this chunk.[/bold yellow]")
                 
                 # Stop after 10 seconds
                 if time.time() - start_time > 10:
                     break
     except KeyboardInterrupt:
-        print("\nStopped by user")
+        console.print("\nStopped by user")
     except Exception as e:
-        print(f"Error: {str(e)}", file=sys.stderr) 
+        console.print(f"[bold red]Error: {str(e)}[/bold red]") 
