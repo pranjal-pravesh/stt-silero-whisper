@@ -1,0 +1,2 @@
+# Core dependencies
+pyaudio==0.2.13 

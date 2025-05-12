@@ -1,0 +1,58 @@
+# Python bytecode files
+__pycache__/
+*.pyc
+*.pyo
+
+# Python distribution directories
+dist/
+build/
+eggs/
+*.egg-info/
+
+# Virtual environment directories
+venv/
+env/
+.venv/
+ENV/
+env.bak/
+venv.bak/
+
+# IDE/editor specific files
+.vscode/
+.idea/
+*.swp
+*.swo
+*.sublime-workspace
+*.sublime-project
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# PyCharm files
+*.iml
+.idea/
+
+# Log files
+*.log
+
+# Coverage reports
+.coverage
+*.coveragerc
+nosetests.xml
+coverage.xml
+*.hypothesis/
+
+# Sphinx documentation
+_build/
+docs/_build/
+
+# Distribution/Packaging
+*.tar.gz
+*.zip
+
+# Testing files
+pytest_cache/
+*.tox/
+*.nox/
+*.coverage
+*.hypothesis/
