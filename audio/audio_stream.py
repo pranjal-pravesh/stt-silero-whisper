@@ -4,33 +4,51 @@
 import pyaudio
 import sys
 import time
+import numpy as np
+import struct
+
+# Import VADDetector only if available, otherwise gracefully handle import
+try:
+    from vad.vad_detector import VADDetector
+    VAD_AVAILABLE = True
+except ImportError:
+    VAD_AVAILABLE = False
+    print("VAD module not found. Speech detection will be disabled.")
 
 class AudioStream:
     """
     Continuously reads audio from the system microphone in small chunks.
     Provides access to audio in 16-bit mono PCM format at 16000 Hz.
+    Can optionally detect speech using Silero VAD in real-time.
     """
     
-    def __init__(self, chunk_duration_ms=30, sample_rate=16000, channels=1, mic_index=None):
+    def __init__(self, chunk_duration_ms=100, sample_rate=16000, channels=1, mic_index=None, vad_threshold=0.5, enable_vad=True):
         """
         Initialize the audio stream with the specified parameters.
         
         Args:
-            chunk_duration_ms (int): Duration of each audio chunk in milliseconds
+            chunk_duration_ms (int): Duration of each audio chunk in milliseconds.
+                                    100ms is recommended for Silero VAD.
             sample_rate (int): Sample rate in Hz
             channels (int): Number of audio channels (1 for mono)
             mic_index (int, optional): Index of the microphone to use. If None, default mic is used.
+            vad_threshold (float): Speech detection threshold between 0 and 1. Default is 0.5.
+            enable_vad (bool): Whether to enable speech detection using Silero VAD. Default is True.
         """
         self.sample_rate = sample_rate
         self.channels = channels
         self.format = pyaudio.paInt16  # 16-bit PCM
         self.mic_index = mic_index
+        self.vad_threshold = vad_threshold
+        self.enable_vad = enable_vad and VAD_AVAILABLE
         
         # Calculate frames per buffer based on chunk duration
         self.frames_per_buffer = int(sample_rate * chunk_duration_ms / 1000)
         
         self.pa = None
         self.stream = None
+        self.vad = None
+        self.buffer = bytes()
         
         try:
             self.pa = pyaudio.PyAudio()
@@ -48,6 +66,18 @@ class AudioStream:
                 frames_per_buffer=self.frames_per_buffer
             )
             
+            # Initialize VAD if enabled
+            if self.enable_vad:
+                try:
+                    self.vad = VADDetector(threshold=self.vad_threshold, sample_rate=self.sample_rate)
+                    print(f"Voice Activity Detection enabled with threshold {self.vad_threshold}")
+                    # Get the required buffer size based on VAD requirements
+                    self.required_samples = self.vad.required_samples
+                    self.min_buffer_size = self.required_samples * 2  # in bytes (each sample is 2 bytes)
+                except Exception as e:
+                    print(f"Failed to initialize VAD: {str(e)}", file=sys.stderr)
+                    self.enable_vad = False
+            
             device_info = "default microphone"
             if self.mic_index is not None:
                 try:
@@ -56,6 +86,8 @@ class AudioStream:
                     device_info = f"microphone at index {self.mic_index}"
                     
             print(f"Audio stream started: {self.channels} channel(s) at {self.sample_rate} Hz using {device_info}")
+            print(f"Chunk duration: {chunk_duration_ms}ms ({self.frames_per_buffer} samples)")
+            
         except Exception as e:
             self._cleanup()
             raise RuntimeError(f"Failed to initialize audio stream: {str(e)}")
@@ -110,21 +142,85 @@ class AudioStream:
         print("")
         return mics
     
+    def _bytes_to_numpy(self, audio_chunk):
+        """
+        Convert 16-bit PCM bytes to float32 numpy array in range [-1.0, 1.0].
+        
+        Args:
+            audio_chunk (bytes): 16-bit mono PCM audio data
+            
+        Returns:
+            numpy.ndarray: Float32 audio data in range [-1.0, 1.0]
+        """
+        try:
+            # Each sample is 2 bytes (16-bit)
+            num_samples = len(audio_chunk) // 2
+            
+            # Unpack the bytes to 16-bit integers
+            format_str = f"{num_samples}h"
+            int_samples = struct.unpack(format_str, audio_chunk)
+            
+            # Convert to float32 numpy array and normalize to [-1.0, 1.0]
+            float_samples = np.array(int_samples, dtype=np.float32) / 32768.0
+            
+            return float_samples
+        except Exception as e:
+            print(f"Error converting audio to numpy: {str(e)}", file=sys.stderr)
+            return np.array([], dtype=np.float32)
+    
     def get_next_chunk(self):
         """
-        Generator that yields the next audio buffer.
+        Generator that yields the next audio buffer and performs speech detection if enabled.
         
         Yields:
-            bytes: Audio data in the specified format
+            tuple: (bytes, bool or None) Audio data in PCM format and speech detection result
+                  (True if speech detected, False if no speech, None if VAD is disabled)
         """
         if not self.stream:
             raise RuntimeError("Audio stream is not initialized")
         
         try:
+            chunk_count = 0
+            print("Starting audio capture...")
+            
             while self.stream.is_active():
+                # Read audio data from the stream
                 data = self.stream.read(self.frames_per_buffer, exception_on_overflow=False)
-                print(f"Received audio chunk: {len(data)} bytes")
-                yield data
+                
+                # Only print log message occasionally to reduce output
+                chunk_count += 1
+                if chunk_count % 100 == 1:
+                    print(f"Processing audio... ({len(data)} bytes per chunk)")
+                
+                # Speech detection
+                speech_detected = None
+                
+                if self.enable_vad and self.vad is not None:
+                    try:
+                        # Add new audio to buffer
+                        self.buffer += data
+                        
+                        # Process buffer if it's large enough
+                        if len(self.buffer) >= self.min_buffer_size:
+                            # Check if the chunk contains speech
+                            speech_detected = self.vad.is_speech(self.buffer)
+                            
+                            # Keep a sliding window buffer (retain the latter portion)
+                            if len(self.buffer) > self.min_buffer_size * 2:
+                                self.buffer = self.buffer[-self.min_buffer_size:]
+                    except Exception as e:
+                        print(f"Error in speech detection: {str(e)}", file=sys.stderr)
+                        # If we get persistent errors, disable VAD
+                        self.vad_error_count = getattr(self, 'vad_error_count', 0) + 1
+                        if self.vad_error_count > 10:
+                            print("Too many VAD errors, disabling speech detection")
+                            self.enable_vad = False
+                            self.vad = None
+                        # Continue without speech detection for this chunk
+                        speech_detected = None
+                
+                yield data, speech_detected
+                
         except Exception as e:
             print(f"Error reading from audio stream: {str(e)}", file=sys.stderr)
             raise
@@ -148,6 +244,13 @@ class AudioStream:
                 print(f"Error terminating PyAudio: {str(e)}", file=sys.stderr)
             finally:
                 self.pa = None
+        
+        # Reset VAD if initialized
+        if self.vad is not None:
+            try:
+                self.vad.reset()
+            except Exception as e:
+                print(f"Error resetting VAD: {str(e)}", file=sys.stderr)
     
     def __enter__(self):
         """Context manager entry."""
@@ -163,7 +266,7 @@ class AudioStream:
 
 
 if __name__ == "__main__":
-    print("Testing AudioStream - Press Ctrl+C to stop")
+    print("Testing AudioStream with Silero VAD - Press Ctrl+C to stop")
     
     # List available microphones
     mics = AudioStream.list_available_microphones()
@@ -179,12 +282,22 @@ if __name__ == "__main__":
             print("Invalid input, using default microphone")
     
     try:
-        # Use the selected microphone
-        with AudioStream(mic_index=selected_mic) as audio:
-            # Collect audio for 5 seconds as an example
+        # Use the selected microphone with VAD enabled
+        with AudioStream(chunk_duration_ms=100, mic_index=selected_mic, enable_vad=True) as audio:
+            print("Listening for audio and detecting speech... (Press Ctrl+C to stop)")
+            
+            # Process audio for 10 seconds
             start_time = time.time()
-            for chunk in audio.get_next_chunk():
-                if time.time() - start_time > 5:
+            for chunk, is_speech in audio.get_next_chunk():
+                # Print detection result if available
+                if is_speech is not None:
+                    if is_speech:
+                        print("Speech detected in this chunk!")
+                    else:
+                        print("No speech in this chunk.")
+                
+                # Stop after 10 seconds
+                if time.time() - start_time > 10:
                     break
     except KeyboardInterrupt:
         print("\nStopped by user")

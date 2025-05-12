@@ -8,6 +8,7 @@ This module ties together all components of the system.
 
 import sys
 import os
+import time
 
 # Remove the parent directory addition since we're now in the root directory
 # sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -33,12 +34,32 @@ def main():
             except ValueError:
                 print("Invalid input, using default microphone")
         
-        # Initialize the audio stream with the selected microphone
-        with AudioStream(mic_index=selected_mic) as audio:
+        # Initialize the audio stream with the selected microphone and VAD enabled
+        with AudioStream(
+            chunk_duration_ms=100,
+            mic_index=selected_mic,
+            vad_threshold=0.5,
+            enable_vad=True
+        ) as audio:
             print("Listening for audio input. Press Ctrl+C to stop.")
-            for chunk in audio.get_next_chunk():
-                # Process the audio chunk (to be implemented)
-                pass
+            
+            # Status tracking variables
+            speech_count = 0
+            last_status_time = time.time()
+            
+            # Process audio chunks with built-in VAD
+            for chunk, is_speech in audio.get_next_chunk():
+                # Process speech here (future implementation)
+                if is_speech:
+                    speech_count += 1
+                    print(f"🎯 Speech detected! Processing speech segment #{speech_count}...")
+                    # Future: Do something with detected speech
+                
+                # Print periodic status updates
+                current_time = time.time()
+                if current_time - last_status_time > 30:  # Status update every 30 seconds
+                    print(f"👂 Still listening... ({speech_count} speech segments detected so far)")
+                    last_status_time = current_time
                 
     except KeyboardInterrupt:
         print("\nProactive Agent stopped by user")
