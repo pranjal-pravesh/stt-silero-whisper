@@ -15,34 +15,64 @@ from rich.console import Console
 # Create a console for Rich output
 console = Console()
 
+# Import config manager if available
+try:
+    from config import get_config
+    CONFIG_AVAILABLE = True
+except ImportError:
+    CONFIG_AVAILABLE = False
+    console.print("[bold yellow]Config module not found. Using default settings.[/bold yellow]")
+
 class VADDetector:
     """
     Voice Activity Detection using the Silero VAD model.
     Detects whether speech is present in an audio chunk.
     """
     
-    def __init__(self, threshold=0.5, sample_rate=16000, verbose=False):
+    def __init__(self, threshold=None, sample_rate=None, verbose=False):
         """
         Initialize the VAD detector with the specified threshold.
+        If parameters are None, they will be loaded from config.
         
         Args:
-            threshold (float): Speech detection threshold between 0 and 1.
-                              Higher values make detection more strict. Default is 0.5.
-            sample_rate (int): Sample rate in Hz. Default is 16000.
+            threshold (float, optional): Speech detection threshold between 0 and 1.
+                                      Higher values make detection more strict. Default is 0.5.
+            sample_rate (int, optional): Sample rate in Hz. Default is 16000.
             verbose (bool): Whether to log detailed information. Default is False.
         """
-        if not 0 <= threshold <= 1:
-            raise ValueError("Threshold must be between 0 and 1")
+        # Load configuration from config manager
+        if CONFIG_AVAILABLE:
+            config = get_config()
+            vad_type = config.get("vad.type", "silero")
+            self.threshold = threshold if threshold is not None else config.get(f"vad.{vad_type}.threshold", 0.5)
+            self.sample_rate = sample_rate or config.get("audio.sample_rate", 16000)
+            self.window_size_samples = config.get(f"vad.{vad_type}.window_size_samples", 512)
+            self.min_speech_duration_ms = config.get(f"vad.{vad_type}.min_speech_duration_ms", 250)
+            self.min_silence_duration_ms = config.get(f"vad.{vad_type}.min_silence_duration_ms", 100)
+            self.use_gpu = config.get("vad.use_gpu", False)
+        else:
+            # Fallback to default values
+            self.threshold = threshold if threshold is not None else 0.5
+            self.sample_rate = sample_rate or 16000
+            self.window_size_samples = 512
+            self.min_speech_duration_ms = 250
+            self.min_silence_duration_ms = 100
+            self.use_gpu = False
         
-        self.threshold = threshold
-        self.sample_rate = sample_rate
         self.verbose = verbose
         self.last_speech_probability = 0.0  # Track last speech probability
+        
+        if not 0 <= self.threshold <= 1:
+            raise ValueError("Threshold must be between 0 and 1")
         
         # Silero VAD requires specific number of samples:
         # - 256 samples for 8kHz
         # - 512 samples for 16kHz
-        self.required_samples = 512 if self.sample_rate == 16000 else 256
+        if self.window_size_samples not in [256, 512, 1024, 1536]:
+            console.print(f"[yellow]Warning: window_size_samples should be 256, 512, 1024, or 1536. Using default instead of {self.window_size_samples}[/yellow]")
+            self.required_samples = 512 if self.sample_rate == 16000 else 256
+        else:
+            self.required_samples = self.window_size_samples
         
         try:
             # Initialize silero VAD model
@@ -55,6 +85,11 @@ class VADDetector:
                 verbose=False  # Reduce logging noise
             )
             
+            # Move to GPU if requested and available
+            if self.use_gpu and torch.cuda.is_available():
+                model = model.to('cuda')
+                console.print("[bold green]Using GPU for VAD processing[/bold green]")
+            
             # Unpack the utils
             (get_speech_timestamps, 
              save_audio,
@@ -64,12 +99,22 @@ class VADDetector:
             
             # Create VAD iterator with explicit options
             self.model = model  # Store the model directly
-            self.vad = VADIterator(model, threshold=self.threshold, sampling_rate=sample_rate)
-            console.print(f"[bold green]Silero VAD initialized[/bold green] with threshold {self.threshold} for {sample_rate} Hz audio")
-            console.print(f"Required samples per chunk: {self.required_samples}")
+            self.vad = VADIterator(
+                model,
+                threshold=self.threshold,
+                sampling_rate=self.sample_rate
+            )
+            
+            console.print(
+                f"[bold green]Silero VAD initialized[/bold green] "
+                f"threshold={self.threshold}, sample_rate={self.sample_rate} Hz, "
+                f"window_size_samples={self.required_samples}, use_gpu={self.use_gpu}"
+            )
             
             # Test the VAD with a silent sample to ensure it's working
             test_tensor = torch.zeros(self.required_samples)
+            if self.use_gpu and torch.cuda.is_available():
+                test_tensor = test_tensor.to('cuda')
             _ = self.vad(test_tensor, self.sample_rate)
             
         except Exception as e:

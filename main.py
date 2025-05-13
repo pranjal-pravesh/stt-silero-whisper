@@ -9,17 +9,21 @@ This module ties together all components of the system.
 import sys
 import os
 import time
+import threading
 from rich.console import Console
 from rich.live import Live
 from rich.panel import Panel
 from rich.text import Text
 from rich.spinner import Spinner
 from rich.table import Table
+from rich.syntax import Syntax
 
 # Remove the parent directory addition since we're now in the root directory
 # sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from audio.audio_stream import AudioStream
+from audio import AudioStream
+from config import get_config
+from stt import SpeechBuffer, TranscriptionWorker
 
 
 def main():
@@ -30,11 +34,14 @@ def main():
     try:
         console.print("[bold green]Starting Proactive Agent...[/bold green]")
         
+        # Load configuration
+        config = get_config()
+        
         # List available microphones and let the user select one
         mics = AudioStream.list_available_microphones()
         
         # Ask user to select a microphone
-        selected_mic = None
+        selected_mic = config.get("audio.device_index")  # Get from config
         if mics:
             try:
                 mic_index = console.input("\n[bold cyan]Enter microphone index to use (leave empty for default): [/bold cyan]").strip()
@@ -48,13 +55,30 @@ def main():
         
         # Initialize the audio stream with the selected microphone and VAD enabled
         with AudioStream(
-            chunk_duration_ms=100,
+            chunk_duration_ms=int(1000 * config.get("audio.chunk_size") / config.get("audio.sample_rate", 16000)),
+            sample_rate=config.get("audio.sample_rate", 16000),
+            channels=config.get("audio.channels", 1),
             mic_index=selected_mic,
-            vad_threshold=0.5,
+            vad_threshold=config.get("vad.silero.threshold", 0.5),
             enable_vad=True,
             verbose=verbose
         ) as audio:
             console.print("\n[bold green]Listening for audio input. Press Ctrl+C to stop.[/bold green]")
+            
+            # Initialize speech buffer for collecting speech segments
+            speech_buffer = SpeechBuffer(
+                pre_speech_ms=500,
+                sample_rate=config.get("audio.sample_rate", 16000),
+                verbose=verbose
+            )
+            
+            # Initialize transcription worker
+            transcriber = TranscriptionWorker(
+                model_size=config.get("stt.model", "base"),
+                language=config.get("stt.language", "en"),
+                use_gpu=config.get("vad.use_gpu", False),
+                verbose=verbose
+            )
             
             # Status tracking variables
             speech_count = 0
@@ -64,9 +88,37 @@ def main():
             speech_duration = 0
             silence_duration = 0
             last_status_change = time.time()
+            current_transcript = ""
+            transcription_queue = []
             
             # Create a spinner
             spinner = Spinner("dots", text="Listening...")
+            
+            # Transcription worker thread
+            def transcription_worker():
+                while True:
+                    # Check if there's a segment to transcribe
+                    if transcription_queue:
+                        audio_segment, segment_id = transcription_queue.pop(0)
+                        try:
+                            # Transcribe the audio segment
+                            transcript = transcriber.transcribe(
+                                audio_segment, 
+                                sample_rate=config.get("audio.sample_rate", 16000)
+                            )
+                            
+                            # Update the current transcript
+                            nonlocal current_transcript
+                            current_transcript = transcript
+                        except Exception as e:
+                            console.print(f"[bold red]Transcription error: {str(e)}[/bold red]")
+                    
+                    # Sleep to avoid busy waiting
+                    time.sleep(0.1)
+            
+            # Start the transcription worker thread
+            transcription_thread = threading.Thread(target=transcription_worker, daemon=True)
+            transcription_thread.start()
             
             # Create a single live display that will be continuously updated
             with Live(
@@ -119,6 +171,20 @@ def main():
                     
                     table.add_row("Session time:", f"{minutes:02d}:{seconds:02d}")
                     
+                    # Add the transcript if available
+                    if current_transcript:
+                        table.add_row("", "")  # Empty row for spacing
+                        table.add_row("[bold]Last transcript:[/bold]", "")
+                        transcript_style = Syntax(
+                            current_transcript, 
+                            "text", 
+                            theme="monokai",
+                            word_wrap=True,
+                            line_numbers=False,
+                            background_color="default"
+                        )
+                        table.add_row("", transcript_style)
+                    
                     return Panel(
                         table,
                         title="Proactive Agent",
@@ -136,6 +202,12 @@ def main():
                     vad_prob = getattr(audio.vad, 'last_speech_probability', 0.0) if audio.vad else 0.0
                     if vad_prob is not None:
                         last_vad_prob = vad_prob
+                    
+                    # Add chunk to speech buffer and check if a segment is complete
+                    audio_segment = speech_buffer.add_chunk(chunk, is_speech)
+                    if audio_segment:
+                        # Add the segment to the transcription queue
+                        transcription_queue.append((audio_segment, speech_count))
                     
                     # Update the speaking status based on VAD result
                     if is_speech:

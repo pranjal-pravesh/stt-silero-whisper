@@ -19,6 +19,14 @@ except ImportError:
     VAD_AVAILABLE = False
     console.print("[bold yellow]VAD module not found. Speech detection will be disabled.[/bold yellow]")
 
+# Import config manager if available
+try:
+    from config import get_config
+    CONFIG_AVAILABLE = True
+except ImportError:
+    CONFIG_AVAILABLE = False
+    console.print("[bold yellow]Config module not found. Using default settings.[/bold yellow]")
+
 class AudioStream:
     """
     Continuously reads audio from the system microphone in small chunks.
@@ -26,30 +34,50 @@ class AudioStream:
     Can optionally detect speech using Silero VAD in real-time.
     """
     
-    def __init__(self, chunk_duration_ms=100, sample_rate=16000, channels=1, mic_index=None, vad_threshold=0.5, enable_vad=True, verbose=False):
+    def __init__(self, chunk_duration_ms=None, sample_rate=None, channels=None, mic_index=None, vad_threshold=None, enable_vad=True, verbose=False):
         """
         Initialize the audio stream with the specified parameters.
+        If parameters are None, they will be loaded from config.
         
         Args:
-            chunk_duration_ms (int): Duration of each audio chunk in milliseconds.
-                                    100ms is recommended for Silero VAD.
-            sample_rate (int): Sample rate in Hz
-            channels (int): Number of audio channels (1 for mono)
+            chunk_duration_ms (int, optional): Duration of each audio chunk in milliseconds.
+                                            100ms is recommended for Silero VAD.
+            sample_rate (int, optional): Sample rate in Hz
+            channels (int, optional): Number of audio channels (1 for mono)
             mic_index (int, optional): Index of the microphone to use. If None, default mic is used.
-            vad_threshold (float): Speech detection threshold between 0 and 1. Default is 0.5.
+            vad_threshold (float, optional): Speech detection threshold between 0 and 1. Default is 0.5.
             enable_vad (bool): Whether to enable speech detection using Silero VAD. Default is True.
             verbose (bool): Whether to log detailed information. Default is False.
         """
-        self.sample_rate = sample_rate
-        self.channels = channels
+        # Load config if available
+        if CONFIG_AVAILABLE:
+            config = get_config()
+            # Use passed parameters or fallback to config values
+            self.sample_rate = sample_rate or config.get("audio.sample_rate", 16000)
+            self.channels = channels or config.get("audio.channels", 1)
+            self.mic_index = mic_index if mic_index is not None else config.get("audio.device_index")
+            self.vad_threshold = vad_threshold if vad_threshold is not None else config.get("vad.silero.threshold", 0.5)
+            # Calculate frames per buffer
+            chunk_size = config.get("audio.chunk_size", 480)  # Default to 480 samples (30ms at 16kHz)
+            if chunk_duration_ms is None:
+                self.frames_per_buffer = chunk_size
+            else:
+                self.frames_per_buffer = int(self.sample_rate * chunk_duration_ms / 1000)
+        else:
+            # Use passed parameters or fallback to hardcoded defaults
+            self.sample_rate = sample_rate or 16000
+            self.channels = channels or 1
+            self.mic_index = mic_index
+            self.vad_threshold = vad_threshold or 0.5
+            # Calculate frames per buffer
+            if chunk_duration_ms is None:
+                self.frames_per_buffer = 480  # Default to 480 samples (30ms at 16kHz)
+            else:
+                self.frames_per_buffer = int(self.sample_rate * chunk_duration_ms / 1000)
+        
         self.format = pyaudio.paInt16  # 16-bit PCM
-        self.mic_index = mic_index
-        self.vad_threshold = vad_threshold
         self.enable_vad = enable_vad and VAD_AVAILABLE
         self.verbose = verbose
-        
-        # Calculate frames per buffer based on chunk duration
-        self.frames_per_buffer = int(sample_rate * chunk_duration_ms / 1000)
         
         self.pa = None
         self.stream = None
@@ -92,7 +120,7 @@ class AudioStream:
                     device_info = f"microphone at index {self.mic_index}"
                     
             console.print(f"[bold green]Audio stream started:[/bold green] {self.channels} channel(s) at {self.sample_rate} Hz using {device_info}")
-            console.print(f"Chunk duration: {chunk_duration_ms}ms ({self.frames_per_buffer} samples)")
+            console.print(f"Chunk duration: {1000 * self.frames_per_buffer / self.sample_rate:.1f}ms ({self.frames_per_buffer} samples)")
             
         except Exception as e:
             self._cleanup()

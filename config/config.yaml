@@ -1,0 +1,23 @@
+audio:
+  sample_rate: 16000      # Hz
+  channels: 1             # Mono
+  sample_width: 2         # 16-bit
+  chunk_size: 512         # x/16 ms of audio at 16kHz
+  frames_per_buffer: 960  # 60ms buffer (2 chunks)
+  device_index: null      # Auto-select default device
+
+vad:
+  type: "silero"          # Options: "webrtc", "silero"
+  use_gpu: false
+  webrtc:                 # Not used for now 
+    mode: 3               # Aggressiveness (0-3)
+  silero:               
+    threshold: 0.2        # Detection threshold (0-1)
+    window_size_samples: 512  # Must be 512, 1024, 1536 for 16kHz audio
+
+stt:
+  model: "tiny"          # Valid faster-whisper models: tiny, base, small, medium, large-v3
+  language: "en"          # Language code
+  buffer_timeout_ms: 1000 # Time to wait for more audio before processing
+  min_audio_length_s: 0.5 # Minimum audio length to process
+  max_audio_length_s: 30  # Maximum audio length before forced processing 
