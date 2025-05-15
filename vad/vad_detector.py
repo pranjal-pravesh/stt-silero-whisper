@@ -49,6 +49,7 @@ class VADDetector:
             self.window_size_samples = config.get(f"vad.{vad_type}.window_size_samples", 512)
             self.min_speech_duration_ms = config.get(f"vad.{vad_type}.min_speech_duration_ms", 250)
             self.min_silence_duration_ms = config.get(f"vad.{vad_type}.min_silence_duration_ms", 100)
+            self.speech_pad_ms = config.get(f"vad.{vad_type}.speech_pad_ms", 30)
             self.use_gpu = config.get("vad.use_gpu", False)
         else:
             # Fallback to default values
@@ -57,6 +58,7 @@ class VADDetector:
             self.window_size_samples = 512
             self.min_speech_duration_ms = 250
             self.min_silence_duration_ms = 100
+            self.speech_pad_ms = 30
             self.use_gpu = False
         
         self.verbose = verbose
@@ -105,10 +107,14 @@ class VADDetector:
                 sampling_rate=self.sample_rate
             )
             
+            # Store the get_speech_timestamps function for possible future use with speech_pad_ms
+            self.get_speech_timestamps = get_speech_timestamps
+            
             console.print(
                 f"[bold green]Silero VAD initialized[/bold green] "
                 f"threshold={self.threshold}, sample_rate={self.sample_rate} Hz, "
-                f"window_size_samples={self.required_samples}, use_gpu={self.use_gpu}"
+                f"window_size_samples={self.required_samples}, use_gpu={self.use_gpu}, "
+                f"speech_pad_ms={self.speech_pad_ms}"
             )
             
             # Test the VAD with a silent sample to ensure it's working
@@ -176,6 +182,11 @@ class VADDetector:
             # For better accuracy, we'll check multiple chunks and return True if any contain speech
             speech_detected = False
             speech_probs = []
+            
+            # For more accurate detection with speech_pad_ms, we could use get_speech_timestamps
+            # on the entire audio chunk and apply padding, but this would be more computationally expensive
+            # For now, we'll use the VAD iterator approach and consider implementing a more
+            # sophisticated detection method if needed
             
             # Limit the number of chunks to process to avoid excessive processing
             max_chunks = min(len(audio_np) // self.required_samples, 10)

@@ -1,23 +1,36 @@
 audio:
-  sample_rate: 16000      # Hz
-  channels: 1             # Mono
-  sample_width: 2         # 16-bit
-  chunk_size: 512         # x/16 ms of audio at 16kHz
-  frames_per_buffer: 960  # 60ms buffer (2 chunks)
-  device_index: null      # Auto-select default device
+  sample_rate: 16000      # Sample rate in Hz - must be 16000 for compatibility with most VAD and STT models
+  channels: 1             # Number of audio channels (1 = mono, 2 = stereo) - mono is required for most speech processing
+  sample_width: 2         # Bytes per sample (2 = 16-bit) - standard format for speech processing
+  chunk_size: 1024         # Number of samples per audio chunk - 512 samples = 32ms at 16kHz
+  frames_per_buffer: 1024 # PyAudio buffer size - 100ms of audio data (larger buffers reduce CPU usage)
+  device_index: null      # Microphone device index (null = use default device)
+  normalize_audio: true   # Whether to normalize audio to float32 in range [-1, 1] for VAD processing
 
 vad:
-  type: "silero"          # Options: "webrtc", "silero"
-  use_gpu: false
-  webrtc:                 # Not used for now 
-    mode: 3               # Aggressiveness (0-3)
+  type: "silero"          # Voice Activity Detection type: "webrtc" or "silero"
+  use_gpu: false          # Whether to use GPU acceleration for VAD (if available)
+  
+  # WebRTC VAD settings (used when vad.type = "webrtc")
+  webrtc:                 
+    mode: 3               # Aggressiveness level (0-3): higher values filter out more non-speech
+    frame_duration_ms: 30 # Frame duration in milliseconds (10, 20, or 30 ms only)
+  
+  # Silero VAD settings (used when vad.type = "silero")
   silero:               
-    threshold: 0.2        # Detection threshold (0-1)
-    window_size_samples: 512  # Must be 512, 1024, 1536 for 16kHz audio
+    threshold: 0.2        # Speech detection threshold (0-1): lower values detect more potential speech
+    window_size_samples: 512  # Window size in samples - must be 256 for 8000 sample rate, 512 for 16000
+    min_speech_duration_ms: 150  # Minimum duration to classify segment as speech (milliseconds)
+    min_silence_duration_ms: 100  # Minimum duration to classify segment as silence (milliseconds)
+    speech_pad_ms: 30     # Additional padding around speech segments (milliseconds)
 
 stt:
-  model: "tiny"          # Valid faster-whisper models: tiny, base, small, medium, large-v3
-  language: "en"          # Language code
-  buffer_timeout_ms: 1000 # Time to wait for more audio before processing
-  min_audio_length_s: 0.5 # Minimum audio length to process
-  max_audio_length_s: 30  # Maximum audio length before forced processing 
+  model: "small"         # Faster-whisper model size: tiny, base, small, medium, large-v3
+  language: "en"          # Language code for transcription (en, fr, de, etc.)
+  buffer_timeout_ms: 1000 # Time to wait for more audio before processing (milliseconds)
+  min_audio_length_s: 0.5 # Minimum audio length to process (seconds)
+  max_audio_length_s: 30  # Maximum audio length before forced processing (seconds)
+  compute_type: "int8" # Computation type: float32, float16, int8
+  beam_size: 5            # Beam size for decoder (higher = more accurate but slower)
+  vad_filter: true        # Whether to apply additional VAD filtering in the STT model
+  word_timestamps: true   # Whether to include word-level timestamps in transcriptions 

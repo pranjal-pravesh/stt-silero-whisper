@@ -57,25 +57,41 @@ class AudioStream:
             self.channels = channels or config.get("audio.channels", 1)
             self.mic_index = mic_index if mic_index is not None else config.get("audio.device_index")
             self.vad_threshold = vad_threshold if vad_threshold is not None else config.get("vad.silero.threshold", 0.5)
-            # Calculate frames per buffer
-            chunk_size = config.get("audio.chunk_size", 480)  # Default to 480 samples (30ms at 16kHz)
-            if chunk_duration_ms is None:
-                self.frames_per_buffer = chunk_size
+            self.normalize_audio = config.get("audio.normalize_audio", True)
+            
+            # Set sample width from config (in bytes)
+            sample_width_bytes = config.get("audio.sample_width", 2)
+            if sample_width_bytes == 2:
+                self.format = pyaudio.paInt16
+            elif sample_width_bytes == 4:
+                self.format = pyaudio.paInt32
+            elif sample_width_bytes == 1:
+                self.format = pyaudio.paInt8
             else:
+                self.format = pyaudio.paInt16  # Default to 16-bit PCM
+                console.print(f"[yellow]Unsupported sample width: {sample_width_bytes}, defaulting to 16-bit[/yellow]")
+            
+            # Calculate frames per buffer, respecting config or chunk_duration_ms if provided
+            if chunk_duration_ms is not None:
                 self.frames_per_buffer = int(self.sample_rate * chunk_duration_ms / 1000)
+            else:
+                self.frames_per_buffer = config.get("audio.frames_per_buffer", 
+                                                   config.get("audio.chunk_size", 480))
         else:
             # Use passed parameters or fallback to hardcoded defaults
             self.sample_rate = sample_rate or 16000
             self.channels = channels or 1
             self.mic_index = mic_index
-            self.vad_threshold = vad_threshold or 0.5
+            self.vad_threshold = vad_threshold or 0.25
+            self.format = pyaudio.paInt16  # 16-bit PCM
+            self.normalize_audio = True
+            
             # Calculate frames per buffer
             if chunk_duration_ms is None:
                 self.frames_per_buffer = 480  # Default to 480 samples (30ms at 16kHz)
             else:
                 self.frames_per_buffer = int(self.sample_rate * chunk_duration_ms / 1000)
         
-        self.format = pyaudio.paInt16  # 16-bit PCM
         self.enable_vad = enable_vad and VAD_AVAILABLE
         self.verbose = verbose
         
