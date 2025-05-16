@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Speech Recognition Pipeline Visualization</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f9f9f9;
+        }
+        h1, h2, h3 {
+            color: #2c3e50;
+        }
+        h1 {
+            text-align: center;
+            margin-bottom: 30px;
+            border-bottom: 2px solid #3498db;
+            padding-bottom: 10px;
+        }
+        .section {
+            background-color: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+            padding: 20px;
+            margin-bottom: 30px;
+        }
+        .mermaid {
+            text-align: center;
+            overflow: auto;
+            margin: 20px 0;
+            padding: 15px;
+            background-color: #f6f8fa;
+            border-radius: 5px;
+        }
+        pre {
+            background-color: #f6f8fa;
+            padding: 15px;
+            border-radius: 5px;
+            overflow: auto;
+        }
+        .component {
+            border-left: 4px solid #3498db;
+            padding-left: 15px;
+            margin-bottom: 20px;
+        }
+        .component h3 {
+            margin-top: 0;
+            color: #3498db;
+        }
+        .note {
+            background-color: #fff8dc;
+            padding: 10px;
+            border-left: 4px solid #f1c40f;
+            margin: 10px 0;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 20px 0;
+        }
+        th, td {
+            padding: 10px;
+            border: 1px solid #ddd;
+            text-align: left;
+        }
+        th {
+            background-color: #f2f2f2;
+        }
+        tr:nth-child(even) {
+            background-color: #f9f9f9;
+        }
+    </style>
+</head>
+<body>
+    <h1>Speech Recognition Pipeline Visualization</h1>
+
+    <div class="section">
+        <h2>Project Overview</h2>
+        <p>
+            This project implements a real-time speech recognition system that captures audio from a microphone, 
+            detects speech using Voice Activity Detection (VAD), and transcribes speech to text. The system is designed to be 
+            modular and configurable, with components for audio streaming, voice activity detection, speech buffering, 
+            and transcription.
+        </p>
+    </div>
+
+    <div class="section">
+        <h2>System Architecture</h2>
+        <div class="mermaid">
+            graph TD
+                MIC[Microphone] --> |Audio Data| AS[Audio Stream]
+                AS --> |Audio Chunks| VAD[Voice Activity Detection]
+                VAD --> |Speech/No Speech| SB[Speech Buffer]
+                SB --> |Completed Speech Segments| TW[Transcription Worker]
+                TW --> |Transcribed Text| APP[Application]
+                
+                subgraph "Configuration"
+                    CONFIG[Config File] -.-> AS
+                    CONFIG -.-> VAD
+                    CONFIG -.-> TW
+                end
+        </div>
+    </div>
+
+    <div class="section">
+        <h2>Data Flow Pipeline</h2>
+        <div class="mermaid">
+            sequenceDiagram
+                participant Microphone
+                participant AudioStream
+                participant VADDetector
+                participant SpeechBuffer
+                participant TranscriptionWorker
+                
+                Note over Microphone,TranscriptionWorker: Continuous Audio Processing Flow
+                
+                loop Every audio chunk
+                    Microphone->>AudioStream: Raw audio data
+                    AudioStream->>VADDetector: Process audio chunk
+                    VADDetector->>AudioStream: Return speech detection result
+                    AudioStream->>SpeechBuffer: Add chunk with speech status
+                    
+                    alt Speech detected
+                        SpeechBuffer->>SpeechBuffer: Add to speech buffer
+                    else Speech ended
+                        SpeechBuffer->>TranscriptionWorker: Send completed speech segment
+                        TranscriptionWorker->>TranscriptionWorker: Transcribe audio to text
+                    else No speech
+                        SpeechBuffer->>SpeechBuffer: Update pre-speech buffer
+                    end
+                end
+        </div>
+    </div>
+
+    <div class="section">
+        <h2>Component Breakdown</h2>
+        
+        <div class="component">
+            <h3>Audio Stream (audio_stream.py)</h3>
+            <p>Captures audio from the microphone in continuous chunks.</p>
+            <ul>
+                <li><strong>Purpose:</strong> Interface with system microphone and provide a stream of audio chunks</li>
+                <li><strong>Input:</strong> Raw audio from microphone</li>
+                <li><strong>Output:</strong> Audio chunks (typically 30-100ms) as bytes</li>
+                <li><strong>Key Parameters:</strong> Sample rate, chunk size, buffer size, mic index</li>
+            </ul>
+            <div class="mermaid">
+                flowchart LR
+                    A[Microphone] --> B[PyAudio Stream]
+                    B --> C[Audio Chunks]
+                    C --> D{VAD Enabled?}
+                    D -->|Yes| E[VAD Processing]
+                    D -->|No| F[Return Audio Chunk]
+                    E --> G[Return Audio Chunk + Speech Status]
+            </div>
+        </div>
+        
+        <div class="component">
+            <h3>Voice Activity Detection (vad_detector.py)</h3>
+            <p>Analyzes audio chunks to determine if they contain speech.</p>
+            <ul>
+                <li><strong>Purpose:</strong> Detect the presence of speech in audio data</li>
+                <li><strong>Input:</strong> Audio chunks as bytes</li>
+                <li><strong>Output:</strong> Boolean indicating speech detection</li>
+                <li><strong>Key Parameters:</strong> Threshold, window size, sample rate</li>
+            </ul>
+            <div class="mermaid">
+                flowchart LR
+                    A[Audio Chunk] --> B[Convert to NumPy]
+                    B --> C[Process in Chunks]
+                    C --> D[Silero VAD Model]
+                    D --> E[Get Speech Probability]
+                    E --> F{Probability > Threshold?}
+                    F -->|Yes| G[Speech Detected]
+                    F -->|No| H[No Speech]
+            </div>
+        </div>
+        
+        <div class="component">
+            <h3>Speech Buffer (speech_buffer.py)</h3>
+            <p>Manages audio data and collects speech segments for transcription.</p>
+            <ul>
+                <li><strong>Purpose:</strong> Maintain a rolling buffer of audio and collect complete speech segments</li>
+                <li><strong>Input:</strong> Audio chunks with speech detection status</li>
+                <li><strong>Output:</strong> Complete speech segments when speech ends</li>
+                <li><strong>Key Parameters:</strong> Pre-speech buffer size, sample rate</li>
+            </ul>
+            <div class="mermaid">
+                flowchart TB
+                    A[Audio Chunk + Speech Status] --> B{Speech Detected?}
+                    B -->|Yes| C{Was Already Speaking?}
+                    B -->|No| D{Was Speaking Before?}
+                    
+                    C -->|Yes| E[Add to Speech Buffer]
+                    C -->|No| F[Add Pre-Speech Buffer + Current Chunk]
+                    
+                    D -->|Yes| G[Return Complete Speech Segment]
+                    D -->|No| H[Update Pre-Speech Buffer]
+                    
+                    F --> I[Update State to Speaking]
+                    E --> I
+                    H --> J[Return None]
+                    G --> K[Reset Speech Buffer]
+                    K --> J
+            </div>
+        </div>
+        
+        <div class="component">
+            <h3>Transcription Worker (transcription_worker.py)</h3>
+            <p>Converts audio data to text using a speech recognition model.</p>
+            <ul>
+                <li><strong>Purpose:</strong> Transcribe speech audio into text</li>
+                <li><strong>Input:</strong> Complete speech segment as bytes</li>
+                <li><strong>Output:</strong> Transcribed text</li>
+                <li><strong>Key Parameters:</strong> Model size, language, GPU usage</li>
+            </ul>
+            <div class="mermaid">
+                flowchart TB
+                    A[Speech Audio] --> B{Length Check}
+                    B -->|Too Short| C[Return Empty]
+                    B -->|Sufficient| D[Write to WAV]
+                    D --> E[Transcribe with Whisper]
+                    E --> F[Process Results]
+                    F --> G[Return Transcript]
+            </div>
+        </div>
+    </div>
+
+    <div class="section">
+        <h2>Key Configuration Parameters</h2>
+        <table>
+            <tr>
+                <th>Component</th>
+                <th>Parameter</th>
+                <th>Description</th>
+                <th>Default Value</th>
+            </tr>
+            <tr>
+                <td>Audio Stream</td>
+                <td>sample_rate</td>
+                <td>Audio sample rate in Hz</td>
+                <td>16000</td>
+            </tr>
+            <tr>
+                <td>Audio Stream</td>
+                <td>chunk_size</td>
+                <td>Number of samples per audio chunk</td>
+                <td>1024</td>
+            </tr>
+            <tr>
+                <td>VAD</td>
+                <td>threshold</td>
+                <td>Speech detection threshold (0-1)</td>
+                <td>0.2</td>
+            </tr>
+            <tr>
+                <td>VAD</td>
+                <td>window_size_samples</td>
+                <td>Window size for VAD processing</td>
+                <td>512</td>
+            </tr>
+            <tr>
+                <td>Speech Buffer</td>
+                <td>pre_speech_ms</td>
+                <td>Milliseconds of audio to keep before speech starts</td>
+                <td>500</td>
+            </tr>
+            <tr>
+                <td>Transcription</td>
+                <td>model</td>
+                <td>Whisper model size</td>
+                <td>small</td>
+            </tr>
+        </table>
+    </div>
+
+    <div class="section">
+        <h2>Common Issues and Solutions</h2>
+        
+        <div class="note">
+            <strong>Issue: Previous transcriptions changing when speaking multiple times</strong>
+            <p>This can occur if the transcription system is reprocessing entire audio segments rather than only new audio data.</p>
+            <p><strong>Potential Solutions:</strong></p>
+            <ul>
+                <li>Ensure speech buffer is properly reset after speech segments are sent for transcription</li>
+                <li>Check VAD settings to make sure it's correctly detecting the end of speech</li>
+                <li>Modify transcription logic to process only the new audio data rather than entire buffer</li>
+            </ul>
+        </div>
+        
+        <div class="note">
+            <strong>Issue: Latency in transcription</strong>
+            <p>If there's a significant delay between speaking and seeing the transcription.</p>
+            <p><strong>Potential Solutions:</strong></p>
+            <ul>
+                <li>Adjust VAD parameters to be more responsive</li>
+                <li>Use a smaller Whisper model size (e.g., "tiny" or "base" instead of "medium")</li>
+                <li>Configure compute_type and device parameters for optimal performance</li>
+            </ul>
+        </div>
+    </div>
+
+    <div class="section">
+        <h2>Appendix: Understanding Chunk Size vs Window Size</h2>
+        <p>
+            There are two important size parameters in the system:
+        </p>
+        <ul>
+            <li>
+                <strong>Chunk Size:</strong> The number of audio samples captured from the microphone at once. This affects how 
+                frequently the system processes audio and the latency of the system. In the current configuration, the chunk size 
+                is set to 1024 samples (64ms at 16kHz).
+            </li>
+            <li>
+                <strong>Window Size:</strong> The number of samples the VAD processes at once to determine if speech is present. 
+                The Silero VAD model requires specific window sizes (256, 512, 1024, or 1536 samples). In the current configuration, 
+                the window size is set to 512 samples (32ms at 16kHz).
+            </li>
+        </ul>
+        <p>
+            When the chunk size is larger than the window size, the VAD processes multiple windows within each chunk. If the 
+            chunk size is smaller than the window size, the system buffers audio data until it has enough for a complete window.
+        </p>
+        <div class="mermaid">
+            graph LR
+                subgraph "Audio Stream"
+                    A[Chunk 1: 1024 samples] --> B[Chunk 2: 1024 samples] --> C[Chunk 3: 1024 samples]
+                end
+                
+                subgraph "VAD Processing (512 samples per window)"
+                    A --> D[Window 1]
+                    A --> E[Window 2]
+                    B --> F[Window 3]
+                    B --> G[Window 4]
+                    C --> H[Window 5]
+                    C --> I[Window 6]
+                end
+        </div>
+    </div>
+
+    <!-- Mermaid JS for rendering diagrams -->
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            mermaid.initialize({
+                startOnLoad: true,
+                theme: 'default',
+                securityLevel: 'loose',
+                flowchart: { useMaxWidth: true, htmlLabels: true },
+                sequence: { useMaxWidth: true }
+            });
+        });
+    </script>
+</body>
+</html> 
