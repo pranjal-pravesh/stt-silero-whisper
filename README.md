@@ -1,4 +1,4 @@
-# Proactive Agent
+# Simple Real-TIme Speech to Text
 
 A Python-based audio processing application that can capture and process microphone input.
 
